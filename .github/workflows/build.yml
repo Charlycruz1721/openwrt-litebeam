@@ -1,0 +1,155 @@
+name: Build OpenWrt LiteBeam M5 TECNODANY
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 180
+
+    steps:
+    - name: Instalar dependencias
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential libncurses5-dev \
+          libncursesw5-dev zlib1g-dev gawk gettext libssl-dev \
+          xsltproc wget unzip python3 python3-distutils rsync \
+          file subversion mercurial libelf-dev ccache
+
+    - name: Clonar OpenWrt 24.10.4
+      run: |
+        git clone --depth 1 --branch v24.10.4 \
+          https://github.com/openwrt/openwrt.git
+        cd openwrt
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
+
+    - name: Aplicar configuracion LiteBeam M5
+      run: |
+        cd openwrt
+        cat > .config << 'CONF'
+        CONFIG_TARGET_ath79=y
+        CONFIG_TARGET_ath79_generic=y
+        CONFIG_TARGET_ath79_generic_UBNT_LITEBEAM_M5=y
+        CONFIG_PACKAGE_luci=y
+        CONFIG_PACKAGE_luci-base=y
+        CONFIG_PACKAGE_luci-mod-admin-full=y
+        CONFIG_PACKAGE_luci-theme-bootstrap=y
+        CONFIG_PACKAGE_luci-app-firewall=y
+        CONFIG_PACKAGE_dropbear=y
+        CONFIG_PACKAGE_kmod-ath9k=y
+        CONFIG_PACKAGE_hostapd=y
+        CONFIG_PACKAGE_wpad=y
+        CONFIG_PACKAGE_wireless-regdb=y
+        CONFIG_PACKAGE_iw=y
+        CONFIG_PACKAGE_bridge=y
+        CONFIG_PACKAGE_kmod-bridge=y
+        CONFIG_PACKAGE_nano=y
+        CONFIG_PACKAGE_curl=y
+        CONF
+
+    - name: Aplicar regdb frecuencias extendidas
+      run: |
+        cd openwrt
+        mkdir -p package/firmware/wireless-regdb/files/
+        cat > package/firmware/wireless-regdb/files/regulatory.db.txt << 'REGDB'
+        country 00:
+          (4920 - 6100 @ 80), (30), NO-CCK
+          (4920 - 6100 @ 40), (30), NO-CCK
+          (4920 - 6100 @ 20), (30), NO-CCK
+        country MX:
+          (4920 - 6100 @ 80), (30)
+          (4920 - 6100 @ 40), (30)
+          (4920 - 6100 @ 20), (30)
+        REGDB
+
+    - name: Crear archivos de configuracion
+      run: |
+        cd openwrt
+        mkdir -p files/etc/config files/etc/init.d files/etc/uci-defaults
+
+        cat > files/etc/config/wireless << 'WIFI'
+        config wifi-device 'radio0'
+          option type 'mac80211'
+          option hwmode '11a'
+          option channel '100'
+          option country '00'
+          option htmode 'HT20'
+          option disabled '0'
+        config wifi-iface 'default_radio0'
+          option device 'radio0'
+          option network 'lan'
+          option mode 'ap'
+          option ssid 'TECNODANY2026-AP'
+          option encryption 'psk2'
+          option key 'td1721DANY'
+        WIFI
+
+        cat > files/etc/config/network << 'NET'
+        config interface 'loopback'
+          option ifname 'lo'
+          option proto 'static'
+          option ipaddr '127.0.0.1'
+          option netmask '255.0.0.0'
+        config interface 'lan'
+          option type 'bridge'
+          option ifname 'eth0'
+          option proto 'static'
+          option ipaddr '192.168.1.1'
+          option netmask '255.255.255.0'
+        config interface 'wan'
+          option ifname 'eth1'
+          option proto 'dhcp'
+        NET
+
+        cat > files/etc/config/system << 'SYS'
+        config system
+          option hostname 'LiteBeam-TECNODANY'
+          option timezone 'CST6CDT,M3.2.0,M11.1.0'
+        SYS
+
+        cat > files/etc/init.d/tecnodany-persist << 'INIT'
+        #!/bin/sh /etc/rc.common
+        START=99
+        start() {
+          if ! grep -q "^TECNODANY2026:" /etc/passwd; then
+            HASH=$(echo "td1721DANY" | openssl passwd -1 -stdin)
+            echo "TECNODANY2026:x:1001:1001:Admin:/home/TECNODANY2026:/bin/ash" >> /etc/passwd
+            echo "TECNODANY2026:${HASH}:19000:0:99999:7:::" >> /etc/shadow
+            mkdir -p /home/TECNODANY2026
+          fi
+        }
+        stop() { return 0; }
+        INIT
+        chmod +x files/etc/init.d/tecnodany-persist
+
+        cat > files/etc/uci-defaults/99-tecnodany << 'UCI'
+        #!/bin/sh
+        echo "root:td1721DANY" | chpasswd
+        HASH=$(echo "td1721DANY" | openssl passwd -1 -stdin)
+        if ! grep -q "^TECNODANY2026:" /etc/passwd; then
+          echo "TECNODANY2026:x:1001:1001:Admin:/home/TECNODANY2026:/bin/ash" >> /etc/passwd
+          echo "TECNODANY2026:${HASH}:19000:0:99999:7:::" >> /etc/shadow
+          mkdir -p /home/TECNODANY2026
+        fi
+        uci set system.@system[0].hostname='LiteBeam-TECNODANY'
+        uci commit system
+        exit 0
+        UCI
+        chmod +x files/etc/uci-defaults/99-tecnodany
+
+    - name: Compilar firmware
+      run: |
+        cd openwrt
+        make defconfig
+        make -j$(nproc) V=s
+
+    - name: Subir imagen compilada
+      uses: actions/upload-artifact@v4
+      with:
+        name: openwrt-litebeam-m5-TECNODANY
+        path: openwrt/bin/targets/ath79/generic/*.bin
+        retention-days: 90
