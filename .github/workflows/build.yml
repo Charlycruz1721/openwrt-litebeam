@@ -33,7 +33,7 @@ jobs:
         cat > .config << 'CONF'
         CONFIG_TARGET_ath79=y
         CONFIG_TARGET_ath79_generic=y
-        CONFIG_TARGET_ath79_generic_UBNT_NANOSTATION_LOCO_M_XW=y
+        CONFIG_TARGET_ath79_generic_DEVICE_ubnt_nanostation-loco-m-xw=y
         CONFIG_PACKAGE_luci=y
         CONFIG_PACKAGE_luci-base=y
         CONFIG_PACKAGE_luci-mod-admin-full=y
