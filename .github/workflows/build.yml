@@ -67,85 +67,53 @@ jobs:
           (4920 - 6100 @ 40), (30)
           (4920 - 6100 @ 20), (30)
         REGDB
-
-    - name: Parchear EEPROM regdomain AR9342
+        - name: Parchear EEPROM regdomain AR9342
       run: |
         cd openwrt
-        
-        # Parchear el archivo de calibración ART de la EEPROM del AR9342
-        # El regdomain US (0x0818) se reemplaza por 0x0000 (mundial)
-        cat > files/lib/firmware/ath9k-eeprom-pci-patch.sh << 'PATCH'
-        #!/bin/sh
-        # Parchear regdomain en EEPROM al arranque
-        # Leer EEPROM desde la partición ART
-        dd if=/dev/$(cat /proc/mtd | grep art | cut -d: -f1) \
-           of=/tmp/eeprom_art.bin bs=1 count=4096 2>/dev/null
-        
-        # Cambiar bytes del regdomain (offset 0x1B8) a 0x0000
-        printf '\x00\x00' | dd of=/tmp/eeprom_art.bin \
-           bs=1 seek=440 conv=notrunc 2>/dev/null
-        PATCH
 
-        # Modificar el driver ath9k para ignorar el regdomain de EEPROM
-        # Buscar el archivo correcto en el árbol del kernel
-        ATH_FILE=$(find target/linux/ath79 -name "regd.c" 2>/dev/null | head -1)
-        MAC_ATH=$(find package/kernel/mac80211 -name "regd.c" 2>/dev/null | head -1)
-        
-        echo "Archivos regd.c encontrados:"
-        echo "$ATH_FILE"
-        echo "$MAC_ATH"
-        
-        # Parchear mac80211 regd.c para ignorar regdomain de hardware
-        if [ -n "$MAC_ATH" ]; then
-          # Forzar que el regdomain del módulo ath sea 0 (mundial)
-          sed -i 's/return __ath_regd_init(reg_req)/return 0/' "$MAC_ATH" 2>/dev/null || true
-        fi
+        # Crear directorios necesarios
+        mkdir -p files/lib/firmware
+        mkdir -p files/etc/modules.d
+        mkdir -p files/etc/init.d
 
-        # Crear módulo de opción para forzar regdomain en ath
-        mkdir -p files/etc/modules.d/
-        echo "options ath regdomain=0 bist_mask=0" > files/etc/modules.d/ath9k-custom
+        # Opción del módulo ath para forzar regdomain mundial
+        echo "options ath regdomain=0" > files/etc/modules.d/ath9k-custom
 
-        # Crear script de arranque que parchea la EEPROM en memoria
+        # Script de arranque que fuerza el regdomain
         cat > files/etc/init.d/fix-regdomain << 'EOF'
         #!/bin/sh /etc/rc.common
         START=11
-        STOP=99
 
         start() {
-            # Esperar a que el driver cargue
-            sleep 2
-            
-            # Forzar regdomain mundial en todos los phys disponibles
-            iw reg set 00
-            
-            # Recargar driver con regdomain forzado
-            rmmod ath9k 2>/dev/null
-            rmmod ath9k_common 2>/dev/null  
-            rmmod ath9k_hw 2>/dev/null
-            rmmod ath 2>/dev/null
-            sleep 1
-            modprobe ath regdomain=0
-            modprobe ath9k_hw
-            modprobe ath9k_common
-            modprobe ath9k
-            sleep 1
-            iw reg set 00
-            
-            logger "regdomain forzado a 00 (mundial)"
+        sleep 2
+        rmmod ath9k 2>/dev/null
+        rmmod ath9k_common 2>/dev/null
+        rmmod ath9k_hw 2>/dev/null
+        rmmod ath 2>/dev/null
+        sleep 1
+        modprobe ath regdomain=0
+        modprobe ath9k_hw
+        modprobe ath9k_common
+        modprobe ath9k
+        sleep 1
+        iw reg set 00
+        logger "regdomain forzado a 00"
         }
 
         stop() { return 0; }
         EOF
         chmod +x files/etc/init.d/fix-regdomain
 
-        # Forzar opción del módulo ath desde el kernel
-        # Este es el cambio más profundo y efectivo
-        KCONF=$(find target/linux/ath79 -name "config-*" | head -1)
-        if [ -n "$KCONF" ]; then
+        # Forzar CONFIG_ATH_USER_REGD en la config del kernel
+        for KCONF in $(find target/linux/ath79 -name "config-*"); do
           echo "CONFIG_ATH_USER_REGD=y" >> "$KCONF"
-          echo "Configuración del kernel modificada: $KCONF"
-        fi
-        
+          echo "Modificado: $KCONF"
+        done
+
+
+  
+
+    
     - name: Crear archivos de configuracion
       run: |
         cd openwrt
