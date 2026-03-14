@@ -35,7 +35,6 @@ jobs:
         CONFIG_TARGET_ath79_generic=y
         CONFIG_TARGET_ath79_generic_DEVICE_ubnt_nanostation-loco-m-xw=y
         CONFIG_ATH_USER_REGD=y
-        CONFIG_PACKAGE_ATH_USER_REGD=y
         CONFIG_PACKAGE_luci=y
         CONFIG_PACKAGE_luci-base=y
         CONFIG_PACKAGE_luci-mod-admin-full=y
@@ -67,126 +66,124 @@ jobs:
           (4920 - 6100 @ 40), (30)
           (4920 - 6100 @ 20), (30)
         REGDB
-        - name: Parchear EEPROM regdomain AR9342
+
+    - name: Parchear regdomain AR9342
       run: |
         cd openwrt
 
         # Crear directorios necesarios
-        mkdir -p files/lib/firmware
         mkdir -p files/etc/modules.d
         mkdir -p files/etc/init.d
 
-        # Opción del módulo ath para forzar regdomain mundial
+        # Forzar regdomain=0 al cargar el modulo ath
         echo "options ath regdomain=0" > files/etc/modules.d/ath9k-custom
 
-        # Script de arranque que fuerza el regdomain
+        # Script de arranque que fuerza regdomain mundial en cada boot
         cat > files/etc/init.d/fix-regdomain << 'EOF'
-        #!/bin/sh /etc/rc.common
-        START=11
+#!/bin/sh /etc/rc.common
+START=11
 
-        start() {
-        sleep 2
-        rmmod ath9k 2>/dev/null
-        rmmod ath9k_common 2>/dev/null
-        rmmod ath9k_hw 2>/dev/null
-        rmmod ath 2>/dev/null
-        sleep 1
-        modprobe ath regdomain=0
-        modprobe ath9k_hw
-        modprobe ath9k_common
-        modprobe ath9k
-        sleep 1
-        iw reg set 00
-        logger "regdomain forzado a 00"
-        }
+start() {
+    sleep 2
+    rmmod ath9k 2>/dev/null
+    rmmod ath9k_common 2>/dev/null
+    rmmod ath9k_hw 2>/dev/null
+    rmmod ath 2>/dev/null
+    sleep 1
+    modprobe ath regdomain=0
+    modprobe ath9k_hw
+    modprobe ath9k_common
+    modprobe ath9k
+    sleep 1
+    iw reg set 00
+    logger "regdomain forzado a 00 mundial"
+}
 
-        stop() { return 0; }
-        EOF
+stop() { return 0; }
+EOF
         chmod +x files/etc/init.d/fix-regdomain
 
-        # Forzar CONFIG_ATH_USER_REGD en la config del kernel
+        # Agregar CONFIG_ATH_USER_REGD a todos los configs del kernel ath79
         for KCONF in $(find target/linux/ath79 -name "config-*"); do
           echo "CONFIG_ATH_USER_REGD=y" >> "$KCONF"
           echo "Modificado: $KCONF"
         done
 
-
-  
-
-    
     - name: Crear archivos de configuracion
       run: |
         cd openwrt
-        mkdir -p files/etc/config files/etc/init.d files/etc/uci-defaults
+        mkdir -p files/etc/config
+        mkdir -p files/etc/init.d
+        mkdir -p files/etc/uci-defaults
 
         cat > files/etc/config/wireless << 'WIFI'
-        config wifi-device 'radio0'
-          option type 'mac80211'
-          option hwmode '11a'
-          option channel '100'
-          option country '00'
-          option htmode 'HT20'
-          option disabled '0'
-        config wifi-iface 'default_radio0'
-          option device 'radio0'
-          option network 'lan'
-          option mode 'ap'
-          option ssid 'TECNODANY2026-AP'
-          option encryption 'psk2'
-          option key 'td1721DANY'
-        WIFI
+config wifi-device 'radio0'
+  option type 'mac80211'
+  option hwmode '11a'
+  option channel '100'
+  option country '00'
+  option htmode 'HT20'
+  option disabled '0'
+config wifi-iface 'default_radio0'
+  option device 'radio0'
+  option network 'lan'
+  option mode 'ap'
+  option ssid 'TECNODANY2026-AP'
+  option encryption 'psk2'
+  option key 'td1721DANY'
+WIFI
 
         cat > files/etc/config/network << 'NET'
-        config interface 'loopback'
-          option ifname 'lo'
-          option proto 'static'
-          option ipaddr '127.0.0.1'
-          option netmask '255.0.0.0'
-        config interface 'lan'
-          option type 'bridge'
-          option ifname 'eth0'
-          option proto 'static'
-          option ipaddr '192.168.1.1'
-          option netmask '255.255.255.0'
-        config interface 'wan'
-          option ifname 'eth1'
-          option proto 'dhcp'
-        NET
+config interface 'loopback'
+  option ifname 'lo'
+  option proto 'static'
+  option ipaddr '127.0.0.1'
+  option netmask '255.0.0.0'
+config interface 'lan'
+  option type 'bridge'
+  option ifname 'eth0'
+  option proto 'static'
+  option ipaddr '192.168.1.1'
+  option netmask '255.255.255.0'
+config interface 'wan'
+  option ifname 'eth1'
+  option proto 'dhcp'
+NET
 
         cat > files/etc/config/system << 'SYS'
-        config system
-          option hostname 'LiteBeam-TECNODANY'
-          option timezone 'CST6CDT,M3.2.0,M11.1.0'
-        SYS
+config system
+  option hostname 'LiteBeam-TECNODANY'
+  option timezone 'CST6CDT,M3.2.0,M11.1.0'
+SYS
 
         cat > files/etc/init.d/tecnodany-persist << 'INIT'
-        #!/bin/sh /etc/rc.common
-        START=99
-        start() {
-          if ! grep -q "^TECNODANY2026:" /etc/passwd; then
-            HASH=$(echo "td1721DANY" | openssl passwd -1 -stdin)
-            echo "TECNODANY2026:x:1001:1001:Admin:/home/TECNODANY2026:/bin/ash" >> /etc/passwd
-            echo "TECNODANY2026:${HASH}:19000:0:99999:7:::" >> /etc/shadow
-            mkdir -p /home/TECNODANY2026
-          fi
-        }
-        stop() { return 0; }
-        INIT
+#!/bin/sh /etc/rc.common
+START=99
+start() {
+  if ! grep -q "^TECNODANY2026:" /etc/passwd; then
+    HASH=$(echo "td1721DANY" | openssl passwd -1 -stdin)
+    echo "TECNODANY2026:x:1001:1001:Admin:/home/TECNODANY2026:/bin/ash" >> /etc/passwd
+    echo "TECNODANY2026:${HASH}:19000:0:99999:7:::" >> /etc/shadow
+    mkdir -p /home/TECNODANY2026
+  fi
+}
+stop() { return 0; }
+INIT
         chmod +x files/etc/init.d/tecnodany-persist
 
         cat > files/etc/uci-defaults/99-tecnodany << 'UCI'
-        #!/bin/sh
-        echo "root:td1721DANY" | chpasswd
-        HASH=$(echo "td1721DANY" | openssl passwd -1 -stdin)
-        if ! grep -q "^TECNODANY2026:" /etc/passwd; then
-          echo "TECNODANY2026:x:1001:1001:Admin:/home/TECNODANY2026:/bin/ash" >> /etc/passwd
-          echo "TECNODANY2026:${HASH}:19000:0:99999:7:::" >> /etc/shadow
-          mkdir -p /home/TECNODANY2026
-        fi
-        uci set system.@system[0].hostname='LiteBeam-TECNODANY'
-        uci commit system
-        exit 0
-        UCI
+#!/bin/sh
+echo "root:td1721DANY" | chpasswd
+HASH=$(echo "td1721DANY" | openssl passwd -1 -stdin)
+if ! grep -q "^TECNODANY2026:" /etc/passwd; then
+  echo "TECNODANY2026:x:1001:1001:Admin:/home/TECNODANY2026:/bin/ash" >> /etc/passwd
+  echo "TECNODANY2026:${HASH}:19000:0:99999:7:::" >> /etc/shadow
+  mkdir -p /home/TECNODANY2026
+fi
+uci set system.@system[0].hostname='LiteBeam-TECNODANY'
+uci commit system
+exit 0
+UCI
         chmod +x files/etc/uci-defaults/99-tecnodany
 
     - name: Compilar firmware
