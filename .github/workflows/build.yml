@@ -1,190 +1,22 @@
-name: Build OpenWrt LiteBeam M5 TECNODANY
-
-on:
-  push:
-    branches: [ main ]
-  workflow_dispatch:
-
-jobs:
-  build:
-    runs-on: ubuntu-22.04
-    timeout-minutes: 180
-
-    steps:
-    - name: Instalar dependencias
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y build-essential libncurses5-dev \
-          libncursesw5-dev zlib1g-dev gawk gettext libssl-dev \
-          xsltproc wget unzip python3 python3-distutils rsync \
-          file subversion mercurial libelf-dev ccache
-
-    - name: Clonar OpenWrt 23.05.5
-      run: |
-        git clone --depth 1 --branch v23.05.5 \
-          https://github.com/openwrt/openwrt.git
-        cd openwrt
-        ./scripts/feeds update -a
-        ./scripts/feeds install -a
-
-    - name: Aplicar configuracion LiteBeam M5
-      run: |
-        cd openwrt
-        cat > .config << CONF
-        CONFIG_TARGET_ath79=y
-        CONFIG_TARGET_ath79_generic=y
-        CONFIG_TARGET_ath79_generic_DEVICE_ubnt_nanostation-loco-m-xw=y
-        CONFIG_ATH_USER_REGD=y
-        CONFIG_PACKAGE_luci=y
-        CONFIG_PACKAGE_luci-base=y
-        CONFIG_PACKAGE_luci-mod-admin-full=y
-        CONFIG_PACKAGE_luci-theme-bootstrap=y
-        CONFIG_PACKAGE_luci-app-firewall=y
-        CONFIG_PACKAGE_dropbear=y
-        CONFIG_PACKAGE_kmod-ath9k=y
-        CONFIG_PACKAGE_hostapd=y
-        CONFIG_PACKAGE_wpad=y
-        CONFIG_PACKAGE_wireless-regdb=y
-        CONFIG_PACKAGE_iw=y
-        CONFIG_PACKAGE_bridge=y
-        CONFIG_PACKAGE_kmod-bridge=y
-        CONFIG_PACKAGE_nano=y
-        CONFIG_PACKAGE_curl=y
-        CONFIG_PACKAGE_mtd=y
-        CONF
-
-    - name: Crear parche directo para ath regd.c
-      run: |
-        cd openwrt
-
-        # Buscar el directorio de patches de mac80211
-        MAC_PATCHES=$(find package/kernel/mac80211 -name "patches" -type d 2>/dev/null | head -1)
-        if [ -z "$MAC_PATCHES" ]; then
-          MAC_PATCHES=$(find package/kernel/mac80211 -type d | head -1)
-          mkdir -p "$MAC_PATCHES/patches"
-          MAC_PATCHES="$MAC_PATCHES/patches"
-        fi
-        echo "Patches dir: $MAC_PATCHES"
-
-        # Crear parche que elimina el mapeo de regdomain a US
-        # Este parche modifica ath/regd.c para:
-        # 1. Ignorar el regdomain de la EEPROM
-        # 2. Usar siempre el dominio mundial 00
-        # 3. Eliminar el mapa country->regdmn que convierte 0x0 a US
-        cat > "$MAC_PATCHES/999-ath-regd-permissive.patch" << 'PATCHEOF'
 --- a/drivers/net/wireless/ath/regd.c
 +++ b/drivers/net/wireless/ath/regd.c
-@@ -1,6 +1,8 @@
- // SPDX-License-Identifier: ISC
- /*
-  * Copyright (c) 2008-2009 Atheros Communications Inc.
-+ * Patched for full channel unlock - educational project
-  */
- 
- #include <linux/kernel.h>
-@@ -323,6 +323,11 @@ static u16 ath_regd_get_eepromRD(struct ath_regulatory *reg)
+@@ -323,7 +323,12 @@ static u16 ath_regd_get_eepromRD(struct ath_regulatory *reg)
  
  bool ath_is_world_regd(struct ath_regulatory *reg)
  {
-+	/* Force world regulatory - unlock all channels */
+-	return reg->current_rd & COUNTRY_ERD_FLAG ? false : is_wrd_sku(reg->current_rd);
++	/* Force world regulatory - educational project - unlock all channels */
 +	return true;
-+}
-+
-+bool ath_is_world_regd_orig(struct ath_regulatory *reg)
-+{
- 	return reg->current_rd & COUNTRY_ERD_FLAG ? false : is_wrd_sku(reg->current_rd);
  }
  EXPORT_SYMBOL(ath_is_world_regd);
-@@ -388,6 +393,9 @@ static int __ath_regd_init(struct ath_regulatory *reg)
+ 
+@@ -388,6 +393,10 @@ static int __ath_regd_init(struct ath_regulatory *reg)
  	ath_print_rd_country(country);
  	ath_reg_apply_world_flags(wiphy, NL80211_REGDOM_SET_BY_DRIVER, reg);
  
-+	/* Override country to world/00 */
++	/* Force alpha2 to world/00 ignoring EEPROM country */
 +	memcpy(reg->alpha2, "00", 2);
++	reg->current_rd = 0;
 +
  	return 0;
  }
-PATCHEOF
-
-        echo "=== Parche creado ==="
-        cat "$MAC_PATCHES/999-ath-regd-permissive.patch"
-
-        # Tambien crear parche para regd_common.c si existe
-        cat > "$MAC_PATCHES/998-ath-force-world-regdomain.patch" << 'PATCH2EOF'
---- a/drivers/net/wireless/ath/regd.c
-+++ b/drivers/net/wireless/ath/regd.c
-@@ -1,3 +1,8 @@
-+/*
-+ * Force world regulatory domain for all Atheros devices
-+ * Educational project patch - unlocks all frequencies
-+ */
-+
- // SPDX-License-Identifier: ISC
-PATCH2EOF
-
-        # Kernel config
-        for KCONF in $(find target/linux/ath79 -name "config-*" 2>/dev/null); do
-          echo "CONFIG_ATH_USER_REGD=y" >> "$KCONF"
-          sed -i 's/CONFIG_CFG80211_INTERNAL_REGDB=y/# CONFIG_CFG80211_INTERNAL_REGDB is not set/' "$KCONF" 2>/dev/null || true
-          echo "Modificado: $KCONF"
-        done
-
-    - name: Parchear regdb con frecuencias extendidas
-      run: |
-        cd openwrt
-        REGDB_TXT=$(find feeds/ package/ -name "db.txt" 2>/dev/null | grep -v backup | head -1)
-        echo "db.txt: $REGDB_TXT"
-        if [ -n "$REGDB_TXT" ]; then
-          cp "$REGDB_TXT" "${REGDB_TXT}.backup"
-          printf 'country 00:\n\t(4920 - 6100 @ 80), (30), NO-CCK\n\t(4920 - 6100 @ 40), (30), NO-CCK\n\t(4920 - 6100 @ 20), (30), NO-CCK\n\t(2402 - 2472 @ 40), (20), NO-CCK\n\t(57240 - 63720 @ 2160), (0)\n\ncountry MX:\n\t(4920 - 6100 @ 80), (30)\n\t(4920 - 6100 @ 40), (30)\n\t(4920 - 6100 @ 20), (30)\n\t(2402 - 2472 @ 40), (20)\n\t(57240 - 63720 @ 2160), (0)\n\ncountry US:\n\t(4920 - 6100 @ 80), (30)\n\t(4920 - 6100 @ 40), (30)\n\t(4920 - 6100 @ 20), (30)\n\t(2402 - 2472 @ 40), (20)\n\t(57240 - 63720 @ 2160), (0)\n' > "$REGDB_TXT"
-          echo "db.txt parcheado"
-        fi
-
-    - name: Parchear DTS quitar read-only de ART
-      run: |
-        cd openwrt
-        DTS_FILE=$(find target/linux/ath79 -name "*.dts" | xargs grep -l "nanostation-loco\|loco-m-xw\|UBNT,XW" 2>/dev/null | head -1)
-        if [ -z "$DTS_FILE" ]; then
-          DTS_FILE=$(find target/linux/ath79 -name "*loco*" 2>/dev/null | grep "\.dts$" | head -1)
-        fi
-        echo "DTS: $DTS_FILE"
-        if [ -n "$DTS_FILE" ]; then
-          sed -i '/art@/,/};/{/read-only/d}' "$DTS_FILE"
-          sed -i '/label.*art/,/};/{/read-only/d}' "$DTS_FILE"
-          echo "DTS parcheado"
-        fi
-
-    - name: Crear archivos de configuracion
-      run: |
-        cd openwrt
-        mkdir -p files/etc/config files/etc/init.d files/etc/uci-defaults files/etc/modules.d
-
-        echo "options ath regdomain=0" > files/etc/modules.d/ath9k-custom
-
-        printf "config wifi-device 'radio0'\n\toption type 'mac80211'\n\toption hwmode '11a'\n\toption channel '100'\n\toption country '00'\n\toption htmode 'HT20'\n\toption disabled '0'\nconfig wifi-iface 'default_radio0'\n\toption device 'radio0'\n\toption network 'lan'\n\toption mode 'ap'\n\toption ssid 'TECNODANY2026-AP'\n\toption encryption 'psk2'\n\toption key 'td1721DANY'\n" > files/etc/config/wireless
-
-        printf "config interface 'loopback'\n\toption ifname 'lo'\n\toption proto 'static'\n\toption ipaddr '127.0.0.1'\n\toption netmask '255.0.0.0'\nconfig interface 'lan'\n\toption type 'bridge'\n\toption ifname 'eth0'\n\toption proto 'static'\n\toption ipaddr '192.168.1.1'\n\toption netmask '255.255.255.0'\nconfig interface 'wan'\n\toption ifname 'eth1'\n\toption proto 'dhcp'\n" > files/etc/config/network
-
-        printf "config system\n\toption hostname 'LiteBeam-TECNODANY'\n\toption timezone 'CST6CDT,M3.2.0,M11.1.0'\n" > files/etc/config/system
-
-        printf '#!/bin/sh /etc/rc.common\nSTART=11\n\nstart() {\n    sleep 2\n    rmmod ath9k 2>/dev/null\n    rmmod ath9k_common 2>/dev/null\n    rmmod ath9k_hw 2>/dev/null\n    rmmod ath 2>/dev/null\n    sleep 1\n    modprobe ath regdomain=0\n    modprobe ath9k_hw\n    modprobe ath9k_common\n    modprobe ath9k\n    sleep 1\n    iw reg set 00\n    logger "regdomain forzado a 00 mundial"\n}\n\nstop() { return 0; }\n' > files/etc/init.d/fix-regdomain
-        chmod +x files/etc/init.d/fix-regdomain
-
-        printf '#!/bin/sh /etc/rc.common\nSTART=99\nstart() {\n  if ! grep -q "^TECNODANY2026:" /etc/passwd; then\n    HASH=$(echo "td1721DANY" | openssl passwd -1 -stdin)\n    echo "TECNODANY2026:x:1001:1001:Admin:/home/TECNODANY2026:/bin/ash" >> /etc/passwd\n    echo "TECNODANY2026:${HASH}:19000:0:99999:7:::" >> /etc/shadow\n    mkdir -p /home/TECNODANY2026\n  fi\n}\nstop() { return 0; }\n' > files/etc/init.d/tecnodany-persist
-        chmod +x files/etc/init.d/tecnodany-persist
-
-        printf '#!/bin/sh\necho "root:td1721DANY" | chpasswd\nHASH=$(echo "td1721DANY" | openssl passwd -1 -stdin)\nif ! grep -q "^TECNODANY2026:" /etc/passwd; then\n  echo "TECNODANY2026:x:1001:1001:Admin:/home/TECNODANY2026:/bin/ash" >> /etc/passwd\n  echo "TECNODANY2026:${HASH}:19000:0:99999:7:::" >> /etc/shadow\n  mkdir -p /home/TECNODANY2026\nfi\nuci set system.@system[0].hostname=LiteBeam-TECNODANY\nuci commit system\nexit 0\n' > files/etc/uci-defaults/99-tecnodany
-        chmod +x files/etc/uci-defaults/99-tecnodany
-
-    - name: Compilar firmware
-      run: |
-        cd openwrt
-        make defconfig
-        make -j$(nproc) V=s
-
-    - name: Subir imagen compilada
-      uses: actions/upload-artifact@v4
-      with:
-        name: openwrt-litebeam-m5-TECNODANY-regd-patch
-        path: openwrt/bin/targets/ath79/generic/*.bin
-        retention-days: 90
