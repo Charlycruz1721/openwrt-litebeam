@@ -19,9 +19,9 @@ jobs:
           xsltproc wget unzip python3 python3-distutils rsync \
           file subversion mercurial libelf-dev ccache
 
-    - name: Clonar OpenWrt 21.02.7
+    - name: Clonar OpenWrt 23.05.5
       run: |
-        git clone --depth 1 --branch v21.02.7 \
+        git clone --depth 1 --branch v23.05.5 \
           https://github.com/openwrt/openwrt.git
         cd openwrt
         ./scripts/feeds update -a
@@ -57,46 +57,33 @@ jobs:
       run: |
         cd openwrt
 
-        # Descargar el parche directamente de GitHub
+        # Descargar el parche de doom5
         wget -O /tmp/ath9k_permissive.patch \
           "https://raw.githubusercontent.com/doom5/ath9k_ath5k_full_permissive_unlock_all_channels.patch/master/ath9k_ath5k_full_permissive_unlock_all_channels.patch"
 
         echo "=== Parche descargado ==="
-        head -50 /tmp/ath9k_permissive.patch
+        wc -l /tmp/ath9k_permissive.patch
+        head -30 /tmp/ath9k_permissive.patch
 
-        # Hacer make prepare para que el codigo del kernel este disponible
-        make target/linux/prepare V=s 2>&1 | tail -5 || true
-
-        # Buscar el directorio del driver ath en el build_dir
-        ATH_DIR=$(find build_dir/ -path "*/drivers/net/wireless/ath" -type d 2>/dev/null | head -1)
-        echo "Driver ath encontrado en: $ATH_DIR"
-
-        if [ -n "$ATH_DIR" ]; then
-          echo "=== Aplicando parche en $ATH_DIR ==="
-          patch -d "$ATH_DIR" -p1 < /tmp/ath9k_permissive.patch && echo "Parche aplicado OK" || echo "Parche falló, intentando con -p0"
-          patch -d "$ATH_DIR" -p0 < /tmp/ath9k_permissive.patch && echo "Parche aplicado OK con p0" || true
-        else
-          echo "Driver no encontrado aun, se aplicará como patch de OpenWrt"
-        fi
-
-        # Guardar el parche en el directorio de patches del kernel de OpenWrt
-        # Para que se aplique automaticamente durante la compilacion
-        PATCHES_DIR=$(find target/linux/ath79 -name "patches-*" -type d | head -1)
-        echo "Patches dir: $PATCHES_DIR"
-        if [ -n "$PATCHES_DIR" ]; then
-          cp /tmp/ath9k_permissive.patch "$PATCHES_DIR/999-ath9k-permissive-channels.patch"
-          echo "Parche copiado a: $PATCHES_DIR/999-ath9k-permissive-channels.patch"
-        fi
-
-        # Tambien copiarlo en el directorio de patches de mac80211
+        # El parche va en el directorio de patches de mac80211
+        # que es donde OpenWrt tiene los drivers ath9k/ath5k
         MAC_PATCHES=$(find package/kernel/mac80211 -name "patches" -type d 2>/dev/null | head -1)
         echo "mac80211 patches dir: $MAC_PATCHES"
+
         if [ -n "$MAC_PATCHES" ]; then
           cp /tmp/ath9k_permissive.patch "$MAC_PATCHES/999-ath9k-permissive-channels.patch"
-          echo "Parche copiado a mac80211 patches"
+          echo "Parche copiado correctamente"
+          ls -la "$MAC_PATCHES/" | grep "999"
+        else
+          echo "Buscando directorio de patches alternativo..."
+          find package/kernel/mac80211 -type d | head -10
+          # Crear directorio si no existe
+          mkdir -p package/kernel/mac80211/patches
+          cp /tmp/ath9k_permissive.patch package/kernel/mac80211/patches/999-ath9k-permissive-channels.patch
+          echo "Parche copiado a directorio creado"
         fi
 
-        # Configuracion del kernel
+        # Kernel config
         for KCONF in $(find target/linux/ath79 -name "config-*" 2>/dev/null); do
           echo "CONFIG_ATH_USER_REGD=y" >> "$KCONF"
           echo "Modificado: $KCONF"
@@ -111,6 +98,7 @@ jobs:
           cp "$REGDB_TXT" "${REGDB_TXT}.backup"
           printf 'country 00:\n\t(4920 - 6100 @ 80), (30), NO-CCK\n\t(4920 - 6100 @ 40), (30), NO-CCK\n\t(4920 - 6100 @ 20), (30), NO-CCK\n\t(2402 - 2472 @ 40), (20), NO-CCK\n\t(57240 - 63720 @ 2160), (0)\n\ncountry MX:\n\t(4920 - 6100 @ 80), (30)\n\t(4920 - 6100 @ 40), (30)\n\t(4920 - 6100 @ 20), (30)\n\t(2402 - 2472 @ 40), (20)\n\t(57240 - 63720 @ 2160), (0)\n\ncountry US:\n\t(4920 - 6100 @ 80), (30)\n\t(4920 - 6100 @ 40), (30)\n\t(4920 - 6100 @ 20), (30)\n\t(2402 - 2472 @ 40), (20)\n\t(57240 - 63720 @ 2160), (0)\n' > "$REGDB_TXT"
           echo "db.txt parcheado"
+          cat "$REGDB_TXT"
         fi
 
     - name: Parchear DTS quitar read-only de ART
@@ -158,6 +146,6 @@ jobs:
     - name: Subir imagen compilada
       uses: actions/upload-artifact@v4
       with:
-        name: openwrt-litebeam-m5-TECNODANY-21.02-permissive
+        name: openwrt-litebeam-m5-TECNODANY-23.05-permissive
         path: openwrt/bin/targets/ath79/generic/*.bin
         retention-days: 90
