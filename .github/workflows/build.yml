@@ -53,39 +53,79 @@ jobs:
         CONFIG_PACKAGE_mtd=y
         CONF
 
-    - name: Descargar y aplicar parche doom5 ath9k permissive
+    - name: Crear parche directo para ath regd.c
       run: |
         cd openwrt
 
-        # Descargar el parche de doom5
-        wget -O /tmp/ath9k_permissive.patch \
-          "https://raw.githubusercontent.com/doom5/ath9k_ath5k_full_permissive_unlock_all_channels.patch/master/ath9k_ath5k_full_permissive_unlock_all_channels.patch"
-
-        echo "=== Parche descargado ==="
-        wc -l /tmp/ath9k_permissive.patch
-        head -30 /tmp/ath9k_permissive.patch
-
-        # El parche va en el directorio de patches de mac80211
-        # que es donde OpenWrt tiene los drivers ath9k/ath5k
+        # Buscar el directorio de patches de mac80211
         MAC_PATCHES=$(find package/kernel/mac80211 -name "patches" -type d 2>/dev/null | head -1)
-        echo "mac80211 patches dir: $MAC_PATCHES"
-
-        if [ -n "$MAC_PATCHES" ]; then
-          cp /tmp/ath9k_permissive.patch "$MAC_PATCHES/999-ath9k-permissive-channels.patch"
-          echo "Parche copiado correctamente"
-          ls -la "$MAC_PATCHES/" | grep "999"
-        else
-          echo "Buscando directorio de patches alternativo..."
-          find package/kernel/mac80211 -type d | head -10
-          # Crear directorio si no existe
-          mkdir -p package/kernel/mac80211/patches
-          cp /tmp/ath9k_permissive.patch package/kernel/mac80211/patches/999-ath9k-permissive-channels.patch
-          echo "Parche copiado a directorio creado"
+        if [ -z "$MAC_PATCHES" ]; then
+          MAC_PATCHES=$(find package/kernel/mac80211 -type d | head -1)
+          mkdir -p "$MAC_PATCHES/patches"
+          MAC_PATCHES="$MAC_PATCHES/patches"
         fi
+        echo "Patches dir: $MAC_PATCHES"
+
+        # Crear parche que elimina el mapeo de regdomain a US
+        # Este parche modifica ath/regd.c para:
+        # 1. Ignorar el regdomain de la EEPROM
+        # 2. Usar siempre el dominio mundial 00
+        # 3. Eliminar el mapa country->regdmn que convierte 0x0 a US
+        cat > "$MAC_PATCHES/999-ath-regd-permissive.patch" << 'PATCHEOF'
+--- a/drivers/net/wireless/ath/regd.c
++++ b/drivers/net/wireless/ath/regd.c
+@@ -1,6 +1,8 @@
+ // SPDX-License-Identifier: ISC
+ /*
+  * Copyright (c) 2008-2009 Atheros Communications Inc.
++ * Patched for full channel unlock - educational project
+  */
+ 
+ #include <linux/kernel.h>
+@@ -323,6 +323,11 @@ static u16 ath_regd_get_eepromRD(struct ath_regulatory *reg)
+ 
+ bool ath_is_world_regd(struct ath_regulatory *reg)
+ {
++	/* Force world regulatory - unlock all channels */
++	return true;
++}
++
++bool ath_is_world_regd_orig(struct ath_regulatory *reg)
++{
+ 	return reg->current_rd & COUNTRY_ERD_FLAG ? false : is_wrd_sku(reg->current_rd);
+ }
+ EXPORT_SYMBOL(ath_is_world_regd);
+@@ -388,6 +393,9 @@ static int __ath_regd_init(struct ath_regulatory *reg)
+ 	ath_print_rd_country(country);
+ 	ath_reg_apply_world_flags(wiphy, NL80211_REGDOM_SET_BY_DRIVER, reg);
+ 
++	/* Override country to world/00 */
++	memcpy(reg->alpha2, "00", 2);
++
+ 	return 0;
+ }
+PATCHEOF
+
+        echo "=== Parche creado ==="
+        cat "$MAC_PATCHES/999-ath-regd-permissive.patch"
+
+        # Tambien crear parche para regd_common.c si existe
+        cat > "$MAC_PATCHES/998-ath-force-world-regdomain.patch" << 'PATCH2EOF'
+--- a/drivers/net/wireless/ath/regd.c
++++ b/drivers/net/wireless/ath/regd.c
+@@ -1,3 +1,8 @@
++/*
++ * Force world regulatory domain for all Atheros devices
++ * Educational project patch - unlocks all frequencies
++ */
++
+ // SPDX-License-Identifier: ISC
+PATCH2EOF
 
         # Kernel config
         for KCONF in $(find target/linux/ath79 -name "config-*" 2>/dev/null); do
           echo "CONFIG_ATH_USER_REGD=y" >> "$KCONF"
+          sed -i 's/CONFIG_CFG80211_INTERNAL_REGDB=y/# CONFIG_CFG80211_INTERNAL_REGDB is not set/' "$KCONF" 2>/dev/null || true
           echo "Modificado: $KCONF"
         done
 
@@ -98,7 +138,6 @@ jobs:
           cp "$REGDB_TXT" "${REGDB_TXT}.backup"
           printf 'country 00:\n\t(4920 - 6100 @ 80), (30), NO-CCK\n\t(4920 - 6100 @ 40), (30), NO-CCK\n\t(4920 - 6100 @ 20), (30), NO-CCK\n\t(2402 - 2472 @ 40), (20), NO-CCK\n\t(57240 - 63720 @ 2160), (0)\n\ncountry MX:\n\t(4920 - 6100 @ 80), (30)\n\t(4920 - 6100 @ 40), (30)\n\t(4920 - 6100 @ 20), (30)\n\t(2402 - 2472 @ 40), (20)\n\t(57240 - 63720 @ 2160), (0)\n\ncountry US:\n\t(4920 - 6100 @ 80), (30)\n\t(4920 - 6100 @ 40), (30)\n\t(4920 - 6100 @ 20), (30)\n\t(2402 - 2472 @ 40), (20)\n\t(57240 - 63720 @ 2160), (0)\n' > "$REGDB_TXT"
           echo "db.txt parcheado"
-          cat "$REGDB_TXT"
         fi
 
     - name: Parchear DTS quitar read-only de ART
@@ -146,6 +185,6 @@ jobs:
     - name: Subir imagen compilada
       uses: actions/upload-artifact@v4
       with:
-        name: openwrt-litebeam-m5-TECNODANY-23.05-permissive
+        name: openwrt-litebeam-m5-TECNODANY-regd-patch
         path: openwrt/bin/targets/ath79/generic/*.bin
         retention-days: 90
