@@ -60,71 +60,35 @@ jobs:
         printf 'country 00:\n\t(4920 - 6100 @ 80), (30), NO-CCK\n\t(4920 - 6100 @ 40), (30), NO-CCK\n\t(4920 - 6100 @ 20), (30), NO-CCK\ncountry MX:\n\t(4920 - 6100 @ 80), (30)\n\t(4920 - 6100 @ 40), (30)\n\t(4920 - 6100 @ 20), (30)\n' > package/firmware/wireless-regdb/files/regulatory.db.txt
         cat package/firmware/wireless-regdb/files/regulatory.db.txt
 
-    - name: Parchear DTS para quitar proteccion de particion ART
+    - name: Parchear DTS quitar read-only de ART
       run: |
         cd openwrt
 
-        # Buscar el DTS del dispositivo
-        DTS_FILE=$(find target/linux/ath79 -name "*.dts" | xargs grep -l "nanostation-loco-m-xw\|loco-m-xw\|UBNT,XW" 2>/dev/null | head -1)
+        echo "=== Buscando DTS del dispositivo ==="
+        find target/linux/ath79 -name "*.dts" | xargs grep -l "nanostation-loco\|loco-m-xw\|UBNT,XW" 2>/dev/null | head -5
+
+        DTS_FILE=$(find target/linux/ath79 -name "*.dts" | xargs grep -l "nanostation-loco\|loco-m-xw\|UBNT,XW" 2>/dev/null | head -1)
+
         if [ -z "$DTS_FILE" ]; then
-          DTS_FILE=$(find target/linux/ath79 -name "*nanostation*loco*" 2>/dev/null | head -1)
+          echo "Buscando por nombre de archivo..."
+          DTS_FILE=$(find target/linux/ath79 -name "*loco*" -o -name "*nanostation*" 2>/dev/null | grep "\.dts$" | head -1)
         fi
-        echo "DTS encontrado: $DTS_FILE"
+
+        echo "DTS seleccionado: $DTS_FILE"
 
         if [ -n "$DTS_FILE" ]; then
-          echo "Contenido particion ART en DTS:"
-          grep -n -A 5 -i "art" "$DTS_FILE"
+          echo "=== Contenido ART antes del parche ==="
+          grep -n "art\|read-only" "$DTS_FILE" | head -20
 
-          # Quitar readonly de la particion ART
-          # Eliminar linea "read-only;" dentro del nodo art
-          sed -i '/label.*=.*"art"/{n;/read-only/d}' "$DTS_FILE"
-          sed -i '/art@/{n;/read-only/d}' "$DTS_FILE"
+          # Eliminar read-only del nodo ART usando sed
+          # Primero intentar eliminar la linea read-only que este cerca de art
+          sed -i '/art@/,/};/{/read-only/d}' "$DTS_FILE"
+          sed -i '/label.*art/,/};/{/read-only/d}' "$DTS_FILE"
 
-          # Buscar y eliminar read-only cerca de ART de forma mas agresiva
-          python3 << 'PYEOF'
-import re
-
-dts_file = "$DTS_FILE"
-with open(dts_file, 'r') as f:
-    content = f.read()
-
-# Encontrar el nodo art y quitar read-only
-# Patron: nodo que contenga "art" y tenga read-only
-def remove_readonly_from_art(content):
-    lines = content.split('\n')
-    result = []
-    in_art_node = False
-    brace_count = 0
-    
-    for i, line in enumerate(lines):
-        # Detectar inicio del nodo art
-        if ('label = "art"' in line or '"art"' in line or 'art@' in line.lower()):
-            in_art_node = True
-            brace_count = 0
-        
-        if in_art_node:
-            brace_count += line.count('{') - line.count('}')
-            # Saltar lineas read-only dentro del nodo art
-            if 'read-only' in line:
-                print(f"Eliminando read-only en linea {i+1}: {line}")
-                continue
-            if brace_count <= 0 and i > 0:
-                in_art_node = False
-        
-        result.append(line)
-    
-    return '\n'.join(result)
-
-new_content = remove_readonly_from_art(content)
-with open(dts_file, 'w') as f:
-    f.write(new_content)
-print("DTS parcheado correctamente")
-PYEOF
-
-          echo "DTS despues del parche:"
-          grep -n -A 5 -i "art" "$DTS_FILE"
+          echo "=== Contenido ART despues del parche ==="
+          grep -n "art\|read-only" "$DTS_FILE" | head -20
         else
-          echo "DTS no encontrado, buscando todos los DTS disponibles:"
+          echo "=== Listando todos los DTS disponibles ==="
           find target/linux/ath79 -name "*.dts" | head -20
         fi
 
@@ -136,13 +100,11 @@ PYEOF
 
         echo "options ath regdomain=0" > files/etc/modules.d/ath9k-custom
 
-        # Script que parchea la ART en cada arranque y fuerza regdomain 00
-        printf '#!/bin/sh /etc/rc.common\nSTART=11\n\nstart() {\n    sleep 2\n    # Parchear regdomain en ART si aun es 08 ff\n    dd if=/dev/mtd7 of=/tmp/art_check.bin bs=1 skip=4142 count=2 2>/dev/null\n    REGDOM=$(hexdump -e '"'"'1/1 "%02x"'"'"' /tmp/art_check.bin)\n    if [ "$REGDOM" != "0000" ]; then\n        logger "Parcheando regdomain ART de $REGDOM a 0000"\n        dd if=/dev/mtd7 of=/tmp/art_patch.bin 2>/dev/null\n        printf '"'"'\\x00\\x00'"'"' | dd of=/tmp/art_patch.bin bs=1 seek=4142 count=2 conv=notrunc 2>/dev/null\n        mtd write /tmp/art_patch.bin art 2>/dev/null || dd if=/tmp/art_patch.bin of=/dev/mtd7 2>/dev/null\n        logger "ART parcheada - reiniciando"\n        reboot\n    fi\n    # Recargar driver con regdomain 0\n    rmmod ath9k 2>/dev/null\n    rmmod ath9k_common 2>/dev/null\n    rmmod ath9k_hw 2>/dev/null\n    rmmod ath 2>/dev/null\n    sleep 1\n    modprobe ath regdomain=0\n    modprobe ath9k_hw\n    modprobe ath9k_common\n    modprobe ath9k\n    sleep 1\n    iw reg set 00\n    logger "regdomain forzado a 00 mundial"\n}\n\nstop() { return 0; }\n' > files/etc/init.d/fix-regdomain
+        printf '#!/bin/sh /etc/rc.common\nSTART=11\n\nstart() {\n    sleep 3\n    dd if=/dev/mtd7 of=/tmp/art_check.bin bs=1 skip=4142 count=2 2>/dev/null\n    REGDOM=$(hexdump -e "1/1 %%02x" /tmp/art_check.bin 2>/dev/null)\n    logger "regdomain actual en ART: $REGDOM"\n    if [ "$REGDOM" != "0000" ]; then\n        logger "Parcheando ART regdomain a 0000"\n        dd if=/dev/mtd7 of=/tmp/art_patch.bin 2>/dev/null\n        printf "\\\\x00\\\\x00" | dd of=/tmp/art_patch.bin bs=1 seek=4142 count=2 conv=notrunc 2>/dev/null\n        dd if=/tmp/art_patch.bin of=/dev/mtd7 2>/dev/null\n        logger "ART parcheada OK"\n    fi\n    rmmod ath9k 2>/dev/null\n    rmmod ath9k_common 2>/dev/null\n    rmmod ath9k_hw 2>/dev/null\n    rmmod ath 2>/dev/null\n    sleep 1\n    modprobe ath regdomain=0\n    modprobe ath9k_hw\n    modprobe ath9k_common\n    modprobe ath9k\n    sleep 1\n    iw reg set 00\n    logger "regdomain forzado a 00 mundial"\n}\n\nstop() { return 0; }\n' > files/etc/init.d/fix-regdomain
         chmod +x files/etc/init.d/fix-regdomain
 
         for KCONF in $(find target/linux/ath79 -name "config-*"); do
           echo "CONFIG_ATH_USER_REGD=y" >> "$KCONF"
-          echo "Modificado: $KCONF"
         done
 
     - name: Crear archivos de configuracion
