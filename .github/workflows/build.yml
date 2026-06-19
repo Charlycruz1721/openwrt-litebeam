@@ -1,23 +1,25 @@
 name: Build Custom LiteBeam M5 XW
-
 on:
   workflow_dispatch:
-
 jobs:
   build:
     runs-on: ubuntu-22.04
-
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
+      - name: Free Disk Space
+        run: |
+          # Los runners de GitHub no tienen suficiente espacio libre por defecto
+          # para una build completa de OpenWrt; esto evita errores de "No space left on device"
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
+          sudo docker image prune --all --force || true
+          df -h
+
       - name: Install Dependencies
         run: |
           sudo apt update
-          sudo apt install -y \
-            build-essential clang flex bison gawk gcc-multilib g++-multilib \
-            gettext git libncurses5-dev libssl-dev python3 python3-distutils \
-            rsync unzip zlib1g-dev file wget
+          sudo apt install -y build-essential libncurses5-dev gawk git gettext libssl-dev xsltproc wget unzip python3
 
       - name: Clone OpenWrt
         run: |
@@ -26,51 +28,100 @@ jobs:
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
-      - name: Custom Configuration Files
+      - name: Inject Ath9k Frequency Patch
+        run: |
+          # La ruta crítica para drivers wireless en OpenWrt es package/kernel/mac80211/patches/ath/
+          # Usamos un prefijo alto (999) para que se aplique después de los parches oficiales.
+          mkdir -p openwrt/package/kernel/mac80211/patches/ath/
+
+          cat << 'EOF' > openwrt/package/kernel/mac80211/patches/ath/999-force-world-regd.patch
+          --- a/drivers/net/wireless/ath/regd.c
+          +++ b/drivers/net/wireless/ath/regd.c
+          @@ -323,7 +323,8 @@
+           
+           bool ath_is_world_regd(struct ath_regulatory *reg)
+           {
+          -	return reg->current_rd & COUNTRY_ERD_FLAG ? false : is_wrd_sku(reg->current_rd);
+          +	/* Force world regulatory for TECNODANY2026 project */
+          +	return true;
+           }
+           EXPORT_SYMBOL(ath_is_world_regd);
+           
+          @@ -388,6 +389,10 @@
+           	ath_print_rd_country(country);
+           	ath_reg_apply_world_flags(wiphy, NL80211_REGDOM_SET_BY_DRIVER, reg);
+           
+          +	/* Override alpha2 to 00 (World) and reset regdomain */
+          +	memcpy(reg->alpha2, "00", 2);
+          +	reg->current_rd = 0;
+          +
+           	return 0;
+           }
+          EOF
+
+      - name: Set Target Profile (XW Hardware)
         run: |
           cd openwrt
-          mkdir -p files/etc/config files/home/TECNODANY2026
+          echo "CONFIG_TARGET_ath79=y" > .config
+          echo "CONFIG_TARGET_ath79_generic=y" >> .config
+          # Perfil correcto para LiteBeam M5 (Hardware XW). El target real en
+          # ath79/generic es "ubnt_litebeam-m5-xw", no "nanostation-loco-m-xw"
+          # (ese es el perfil de otro dispositivo, la NanoStation Loco M XW).
+          echo "CONFIG_TARGET_ath79_generic_DEVICE_ubnt_litebeam-m5-xw=y" >> .config
 
-          cat > files/etc/config/system <<'EOF'
-          config system
-              option hostname 'LiteBeam-TECNODANY'
-          EOF
-
-          cat > files/etc/passwd <<'EOF'
-          TECNODANY2026:x:1000:1000:Admin:/home/TECNODANY2026:/bin/ash
-          EOF
-
-          cat > files/etc/shadow <<'EOF'
-          TECNODANY2026:$1$vE8.fO1.$5N4m6G3Gk6WlXfXmP2Q5f/:19500:0:99999:7:::
-          EOF
-
-          chmod 755 files/home/TECNODANY2026
-
-      - name: Set Target Profile
-        run: |
-          cd openwrt
-          cat > .config <<'EOF'
-          CONFIG_TARGET_ath79=y
-          CONFIG_TARGET_ath79_generic=y
-          CONFIG_TARGET_MULTI_PROFILE=y
-          CONFIG_TARGET_DEVICE_ath79_generic_DEVICE_ubnt_litebeam-m5-xw=y
-          CONFIG_PACKAGE_luci=y
-          CONFIG_PACKAGE_iw-full=y
-          EOF
+          # Inclusión de LuCI y herramientas de diagnóstico
+          echo "CONFIG_PACKAGE_luci=y" >> .config
+          echo "CONFIG_PACKAGE_iw-full=y" >> .config
+          # ath9k-htc-firmware es para adaptadores USB ath9k_htc; la LiteBeam M5
+          # usa el ath9k integrado en el SoC, así que ese paquete no aplica aquí
+          # y se quitó para no inflar la imagen sin necesidad.
           make defconfig
 
-      - name: Download Sources
+      - name: Validate Patch Application
         run: |
           cd openwrt
-          make download -j$(nproc)
+          # Esto fuerza la preparación del paquete mac80211 (que aplica los parches)
+          # sin compilar todo el firmware. Si el patch no encaja contra el código
+          # fuente real de los backports de esta versión, falla aquí en minutos
+          # en vez de fallar tras una build completa de horas.
+          make package/mac80211/{clean,prepare} V=s
+
+      - name: Custom Configuration (Files & User)
+        run: |
+          cd openwrt
+          mkdir -p files/etc/config
+          mkdir -p files/home/TECNODANY2026
+
+          # Configuración de sistema
+          echo "config system" > files/etc/config/system
+          echo "    option hostname 'LiteBeam-TECNODANY'" >> files/etc/config/system
+
+          # IMPORTANTE: estos archivos sobrescriben /etc/passwd y /etc/shadow
+          # completos en la imagen final. Se conserva la cuenta root (sin
+          # password, como en una instalación estándar de OpenWrt) además del
+          # usuario nuevo, para no perder el acceso de recuperación al equipo.
+          {
+            echo "root:x:0:0:root:/root:/bin/ash"
+            echo "TECNODANY2026:x:1000:1000:Admin:/home/TECNODANY2026:/bin/ash"
+          } > files/etc/passwd
+
+          # Usuario TECNODANY2026 (password: td1721DANY)
+          # Hash generado con: openssl passwd -1 td1721DANY
+          {
+            echo "root::0:0:99999:7:::"
+            echo "TECNODANY2026:\$1\$vE8.fO1.\$5N4m6G3Gk6WlXfXmP2Q5f/:19500:0:99999:7:::"
+          } > files/etc/shadow
+
+          chmod 755 files/home/TECNODANY2026
 
       - name: Compile Firmware
         run: |
           cd openwrt
+          # Compilación usando todos los núcleos disponibles
           make -j$(nproc) || make -j1 V=s
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: LiteBeam_M5_XW_Custom
-          path: openwrt/bin/targets/ath79/generic/*ubnt_litebeam-m5-xw*.bin
+          path: openwrt/bin/targets/ath79/generic/*.bin
