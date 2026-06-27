@@ -1,6 +1,8 @@
 name: Build Custom LiteBeam M5 XW
+
 on:
   workflow_dispatch:
+
 jobs:
   build:
     runs-on: ubuntu-22.04
@@ -30,60 +32,29 @@ jobs:
 
       - name: Inject Ath9k Frequency Patch
         run: |
-          # La ruta crítica para drivers wireless en OpenWrt es package/kernel/mac80211/patches/ath/
-          # Usamos un prefijo alto (999) para que se aplique después de los parches oficiales.
+          # Creamos el directorio destino en OpenWrt para los drivers atheros
           mkdir -p openwrt/package/kernel/mac80211/patches/ath/
-
-          cat << 'EOF' > openwrt/package/kernel/mac80211/patches/ath/999-force-world-regd.patch
-          --- a/drivers/net/wireless/ath/regd.c
-          +++ b/drivers/net/wireless/ath/regd.c
-          @@ -323,7 +323,8 @@
-           
-           bool ath_is_world_regd(struct ath_regulatory *reg)
-           {
-          -	return reg->current_rd & COUNTRY_ERD_FLAG ? false : is_wrd_sku(reg->current_rd);
-          +	/* Force world regulatory for TECNODANY2026 project */
-          +	return true;
-           }
-           EXPORT_SYMBOL(ath_is_world_regd);
-           
-          @@ -388,6 +389,10 @@
-           	ath_print_rd_country(country);
-           	ath_reg_apply_world_flags(wiphy, NL80211_REGDOM_SET_BY_DRIVER, reg);
-           
-          +	/* Override alpha2 to 00 (World) and reset regdomain */
-          +	memcpy(reg->alpha2, "00", 2);
-          +	reg->current_rd = 0;
-          +
-           	return 0;
-           }
-          EOF
+          
+          # Copiamos el parche desde la carpeta de nuestro repositorio a OpenWrt
+          cp patches/999-force-world-regd.patch openwrt/package/kernel/mac80211/patches/ath/
 
       - name: Set Target Profile (XW Hardware)
         run: |
           cd openwrt
           echo "CONFIG_TARGET_ath79=y" > .config
           echo "CONFIG_TARGET_ath79_generic=y" >> .config
-          # Perfil correcto para LiteBeam M5 (Hardware XW). El target real en
-          # ath79/generic es "ubnt_litebeam-m5-xw", no "nanostation-loco-m-xw"
-          # (ese es el perfil de otro dispositivo, la NanoStation Loco M XW).
+          # Perfil correcto para LiteBeam M5 (Hardware XW)
           echo "CONFIG_TARGET_ath79_generic_DEVICE_ubnt_litebeam-m5-xw=y" >> .config
 
           # Inclusión de LuCI y herramientas de diagnóstico
           echo "CONFIG_PACKAGE_luci=y" >> .config
           echo "CONFIG_PACKAGE_iw-full=y" >> .config
-          # ath9k-htc-firmware es para adaptadores USB ath9k_htc; la LiteBeam M5
-          # usa el ath9k integrado en el SoC, así que ese paquete no aplica aquí
-          # y se quitó para no inflar la imagen sin necesidad.
           make defconfig
 
       - name: Validate Patch Application
         run: |
           cd openwrt
-          # Esto fuerza la preparación del paquete mac80211 (que aplica los parches)
-          # sin compilar todo el firmware. Si el patch no encaja contra el código
-          # fuente real de los backports de esta versión, falla aquí en minutos
-          # en vez de fallar tras una build completa de horas.
+          # Fuerza la preparación del paquete mac80211 para validar el parche
           make package/mac80211/{clean,prepare} V=s
 
       - name: Custom Configuration (Files & User)
@@ -96,17 +67,12 @@ jobs:
           echo "config system" > files/etc/config/system
           echo "    option hostname 'LiteBeam-TECNODANY'" >> files/etc/config/system
 
-          # IMPORTANTE: estos archivos sobrescriben /etc/passwd y /etc/shadow
-          # completos en la imagen final. Se conserva la cuenta root (sin
-          # password, como en una instalación estándar de OpenWrt) además del
-          # usuario nuevo, para no perder el acceso de recuperación al equipo.
+          # Usuarios y contraseñas
           {
             echo "root:x:0:0:root:/root:/bin/ash"
             echo "TECNODANY2026:x:1000:1000:Admin:/home/TECNODANY2026:/bin/ash"
           } > files/etc/passwd
 
-          # Usuario TECNODANY2026 (password: td1721DANY)
-          # Hash generado con: openssl passwd -1 td1721DANY
           {
             echo "root::0:0:99999:7:::"
             echo "TECNODANY2026:\$1\$vE8.fO1.\$5N4m6G3Gk6WlXfXmP2Q5f/:19500:0:99999:7:::"
@@ -117,7 +83,6 @@ jobs:
       - name: Compile Firmware
         run: |
           cd openwrt
-          # Compilación usando todos los núcleos disponibles
           make -j$(nproc) || make -j1 V=s
 
       - name: Upload Artifact
