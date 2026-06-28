@@ -49,12 +49,12 @@ jobs:
           sed -i 's/if (reg->current_rd == COUNTRY_ERD_FLAG)/if (0)/g' "$REGD_FILE"
           sed -i '/^static int __ath_regd_init/,/^}/ s/return 0;/memcpy(reg->alpha2, "00", 2);\n\treg->current_rd = 0;\n\treturn 0;/g' "$REGD_FILE"
 
-      - name: Compile
+
+      - name: Compile Firmware
         run: |
           cd openwrt
-          # El error que tenías se soluciona ejecutando con -j1 si hay problemas, 
-          # pero primero intentamos con normalidad
-          make -j$(nproc) || make -j1 V=s
+          # Forzamos un solo hilo para ver el error real y evitar condiciones de carrera
+          make -j1 V=s
 
       - name: Upload
         uses: actions/upload-artifact@v4
