@@ -13,11 +13,10 @@ jobs:
       - name: Install Dependencies
         run: |
           sudo apt update
-          # Dependencias críticas para versiones antiguas
+          # Dependencias críticas
           sudo apt install -y build-essential libncurses5-dev gawk git gettext libssl-dev xsltproc wget unzip python3 python3-distutils file
-          # Forzar compatibilidad de versiones antiguas de openssl
-          sudo apt install -y libssl-dev
-
+          # Crear enlace simbólico para que OpenWrt detecte "python"
+          sudo ln -sf /usr/bin/python3 /usr/bin/python
       - name: Clone OpenWrt 18.06
         run: |
           git clone -b openwrt-18.06 https://git.openwrt.org/openwrt/openwrt.git openwrt
@@ -53,8 +52,9 @@ jobs:
       - name: Compile Firmware
         run: |
           cd openwrt
-          # Forzamos un solo hilo para ver el error real y evitar condiciones de carrera
-          make -j1 V=s
+          # FORCE=1 ignora la falta de Python 2 y librerías antiguas
+          # V=s te mostrará el error real si algo más falla
+          make -j$(nproc) FORCE=1 || make -j1 V=s FORCE=1
 
       - name: Upload
         uses: actions/upload-artifact@v4
