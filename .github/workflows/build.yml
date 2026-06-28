@@ -44,28 +44,38 @@ jobs:
           
           make defconfig
 
-      - name: Dynamic Hot-Patch for ath9k (regd.c)
+   - name: Dynamic Hot-Patch for ath9k (regd.c)
         run: |
           cd openwrt
+          # Preparar código fuente
+          make package/mac80211/prepare V=s
           
-          # Preparar código fuente de los drivers inalámbricos
-          make package/kernel/mac80211/prepare V=s
+          echo "=== DEPURACIÓN: Buscando regd.c ==="
+          # Mostramos dónde está el archivo realmente
+          find build_dir/ -name "regd.c"
           
-          # Buscar la ruta exacta del archivo regd.c
-          REGD_FILE=$(find build_dir/ -path "*/drivers/net/wireless/ath/regd.c" | head -n 1)
+          # Buscamos la ruta y la guardamos en la variable
+          REGD_FILE=$(find build_dir/ -name "regd.c" | grep "ath/regd.c" | head -n 1)
           
           if [ -z "$REGD_FILE" ]; then
-            echo "ERROR: No se encontró regd.c. Mostrando todos los regd.c detectados:"
-            find build_dir/ -name "regd.c"
+            echo "ERROR: No se pudo localizar regd.c automáticamente."
             exit 1
           fi
 
-          echo "Parcheando archivo en: $REGD_FILE"
+          echo "Parcheando archivo detectado en: $REGD_FILE"
           
+          # Parcheo de seguridad: antes de sed, verificamos si el archivo contiene lo que buscamos
+          if ! grep -q "ath_is_world_regd" "$REGD_FILE"; then
+              echo "ERROR: La función ath_is_world_regd no existe en $REGD_FILE"
+              exit 1
+          fi
+
+          # Modificaciones
           sed -i 's/return is_wrd_sku(reg->current_rd);/return true;/g' "$REGD_FILE"
           sed -i 's/if (reg->current_rd == COUNTRY_ERD_FLAG)/if (0)/g' "$REGD_FILE"
           sed -i '/^static int __ath_regd_init/,/^}/ s/return 0;/memcpy(reg->alpha2, "00", 2);\n\treg->current_rd = 0;\n\treturn 0;/g' "$REGD_FILE"
-
+          
+          echo "=== Parche aplicado con éxito ==="
       - name: Download Sources
         run: |
           cd openwrt
