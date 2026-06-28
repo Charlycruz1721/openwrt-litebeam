@@ -52,10 +52,10 @@ jobs:
       - name: Compile Firmware
         run: |
           cd openwrt
-          # FORCE=1 ignora la falta de Python 2 y librerías antiguas
-          # V=s te mostrará el error real si algo más falla
-          make -j$(nproc) FORCE=1 || make -j1 V=s FORCE=1
-
+          # El FORCE=1 es necesario para que el Makefile principal
+          # no vuelva a ejecutar el script de prerrequisitos (prereq-build).
+          # Usamos un solo hilo (-j1) inicialmente para evitar errores de red.
+          make -j1 V=s FORCE=1
       - name: Upload
         uses: actions/upload-artifact@v4
         with:
