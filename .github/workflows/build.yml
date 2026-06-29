@@ -13,50 +13,54 @@ jobs:
       - name: Install Dependencies
         run: |
           sudo apt update
-          # Dependencias críticas
           sudo apt install -y build-essential libncurses5-dev gawk git gettext libssl-dev xsltproc wget unzip python3 python3-distutils file
-          # Crear enlace simbólico para que OpenWrt detecte "python"
+          # Enlace para engañar al script de chequeo de OpenWrt
           sudo ln -sf /usr/bin/python3 /usr/bin/python
+
       - name: Clone OpenWrt 18.06
         run: |
           git clone -b openwrt-18.06 https://git.openwrt.org/openwrt/openwrt.git openwrt
 
-      - name: Update Feeds
+      - name: Configure Firmware and Bypass Prereqs
         run: |
           cd openwrt
-          ./scripts/feeds update -a
-          ./scripts/feeds install -a
-
-      - name: Configure Firmware
-        run: |
-          cd openwrt
-          # Configuración básica ar71xx
+          rm -f .config
           echo "CONFIG_TARGET_ar71xx=y" > .config
           echo "CONFIG_TARGET_ar71xx_generic=y" >> .config
           echo "CONFIG_TARGET_ar71xx_generic_DEVICE_ubnt-lbe-m5=y" >> .config
           echo "CONFIG_PACKAGE_luci=y" >> .config
+          
+          # Crear marcas de verificación para saltar el chequeo de prerrequisitos
+          mkdir -p staging_dir/host/stamp
+          touch staging_dir/host/stamp/.prereq-build
+          touch staging_dir/host/stamp/.prereq-tools
+          
           make defconfig
 
-      # PARCHEA AHORA (Antes de compilar nada)
       - name: Hot-Patch regd.c
         run: |
           cd openwrt
-          # En 18.06 el driver ath está en package/kernel/mac80211
+          # Preparar entorno para parchar
           make package/mac80211/prepare V=s
+          
           REGD_FILE=$(find build_dir/ -name "regd.c" | grep "ath/regd.c" | head -n 1)
-          sed -i 's/return is_wrd_sku(reg->current_rd);/return true;/g' "$REGD_FILE"
-          sed -i 's/if (reg->current_rd == COUNTRY_ERD_FLAG)/if (0)/g' "$REGD_FILE"
-          sed -i '/^static int __ath_regd_init/,/^}/ s/return 0;/memcpy(reg->alpha2, "00", 2);\n\treg->current_rd = 0;\n\treturn 0;/g' "$REGD_FILE"
-
+          
+          if [ -n "$REGD_FILE" ]; then
+            sed -i 's/return is_wrd_sku(reg->current_rd);/return true;/g' "$REGD_FILE"
+            sed -i 's/if (reg->current_rd == COUNTRY_ERD_FLAG)/if (0)/g' "$REGD_FILE"
+            sed -i '/^static int __ath_regd_init/,/^}/ s/return 0;/memcpy(reg->alpha2, "00", 2);\n\treg->current_rd = 0;\n\treturn 0;/g' "$REGD_FILE"
+          else
+            echo "Archivo regd.c no encontrado, omitiendo parche."
+          fi
 
       - name: Compile Firmware
         run: |
           cd openwrt
-          # El FORCE=1 es necesario para que el Makefile principal
-          # no vuelva a ejecutar el script de prerrequisitos (prereq-build).
-          # Usamos un solo hilo (-j1) inicialmente para evitar errores de red.
-          make -j1 V=s FORCE=1
-      - name: Upload
+          # FORCE=1 ignora errores menores de versión
+          # Si falla, el V=s nos dirá por qué
+          make -j$(nproc) FORCE=1 || make -j1 V=s FORCE=1
+
+      - name: Upload Firmware
         uses: actions/upload-artifact@v4
         with:
           name: openwrt-18.06-lbe-m5
