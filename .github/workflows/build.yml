@@ -9,20 +9,29 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Install Dependencies + Python 2
         run: |
           sudo apt update
           sudo apt install -y \
-            build-essential gcc g++ g++-multilib \
+            build-essential gcc g++ \
             libncurses5-dev gawk git gettext libssl-dev xsltproc \
-            wget unzip python2 python-is-python2 \
+            wget unzip python2.7 python2.7-dev \
             file libelf-dev zlib1g-dev liblzma-dev subversion quilt
+
+          # Enlaces para OpenWrt 18.06
+          sudo ln -sf /usr/bin/python2.7 /usr/bin/python
+          sudo ln -sf /usr/bin/python2.7 /usr/bin/python2
+          python --version
+          python2 --version
 
           # Enlaces críticos para OpenWrt 18.06
           sudo ln -sf /usr/bin/python2 /usr/bin/python
-          python --version
 
+          # Enlaces para OpenWrt 18.06
+          sudo ln -sf /usr/bin/python2.7 /usr/bin/python
+          sudo ln -sf /usr/bin/python2.7 /usr/bin/python2
+          python --version
+          python2 --version
       - name: Clone OpenWrt
         run: |
           git clone -b openwrt-18.06 https://git.openwrt.org/openwrt/openwrt.git openwrt
