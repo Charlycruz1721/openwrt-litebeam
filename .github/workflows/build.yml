@@ -10,19 +10,24 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Dependencies
+      - name: Install Dependencies (incluyendo Python 2 y GCC)
         run: |
           sudo apt update
           sudo apt install -y \
-            build-essential libncurses5-dev gawk git gettext libssl-dev xsltproc \
-            wget unzip python2 python3 python3-distutils python-is-python2 \
-            file libelf-dev libncurses-dev libz-dev zlib1g-dev \
-            bison flex subversion quilt liblzma-dev
+            build-essential gcc g++ \
+            libncurses5-dev gawk git gettext libssl-dev xsltproc \
+            wget unzip python2 python-is-python2 \
+            file libelf-dev zlib1g-dev liblzma-dev \
+            subversion quilt
+
+          # Forzar enlaces para OpenWrt 18.06
+          sudo ln -sf /usr/bin/python2 /usr/bin/python
+          sudo ln -sf /usr/bin/gcc /usr/bin/gcc-4.8 || true
+          sudo ln -sf /usr/bin/g++ /usr/bin/g++-4.8 || true
 
       - name: Clone OpenWrt 18.06
         run: |
           git clone -b openwrt-18.06 https://git.openwrt.org/openwrt/openwrt.git openwrt
-          cd openwrt
 
       - name: Update Feeds
         run: |
@@ -40,52 +45,42 @@ jobs:
           CONFIG_TARGET_ar71xx_generic=y
           CONFIG_TARGET_ar71xx_generic_DEVICE_ubnt-lbe-m5=y
           CONFIG_PACKAGE_luci=y
-          CONFIG_PACKAGE_luci-app-uhttpd=y
-          # Opcional: más paquetes útiles
-          # CONFIG_PACKAGE_kmod-ath9k=y
           EOF
           
           make defconfig
 
-      - name: Hot-Patch regd.c (Regulatory Bypass)
+      - name: Bypass Prereqs + Hot-Patch regd.c
         run: |
           cd openwrt
           
-          # Preparar el paquete mac80211
+          # Bypass fuerte de prerrequisitos
+          mkdir -p staging_dir/host/stamp
+          touch staging_dir/host/stamp/.prereq-build
+          touch staging_dir/host/stamp/.prereq-tools
+          touch staging_dir/host/stamp/.prereq-host
+          
+          # Preparar mac80211
           make package/kernel/mac80211/prepare V=s || true
           
-          # Buscar regd.c (ath9k en ar71xx)
+          # Parche regulatory (bypass compliance)
           REGD_FILE=$(find build_dir -name regd.c | grep -E "ath/regd.c|ath9k" | head -n 1)
-          
           if [ -n "$REGD_FILE" ]; then
-            echo "Patching $REGD_FILE"
-            
-            # Backup
+            echo "Aplicando parche en: $REGD_FILE"
             cp "$REGD_FILE" "$REGD_FILE.bak"
             
-            # Parches comunes para bypass regulatory (world / 00)
             sed -i 's/return is_wrd_sku(reg->current_rd);/return true;/g' "$REGD_FILE"
             sed -i 's/if (reg->current_rd == COUNTRY_ERD_FLAG)/if (0)/g' "$REGD_FILE"
-            
-            # Forzar country "00" (world) y permitir más canales/potencia
-            sed -i '/__ath_regd_init/,+20 s/return 0;/memcpy(reg->alpha2, "00", 2);\n\treg->current_rd = 0;\n\treturn 0;/' "$REGD_FILE"
-            
-            echo "Parche aplicado correctamente"
-          else
-            echo "⚠️ regd.c no encontrado. Continuando sin parche..."
+            sed -i '/__ath_regd_init/,+30 s/return 0;/memcpy(reg->alpha2, "00", 2);\n\treg->current_rd = 0;\n\treturn 0;/' "$REGD_FILE"
           fi
 
       - name: Compile Firmware
         run: |
           cd openwrt
-          # Usamos -j1 en caso de problemas de memoria/race, pero prueba primero con paralelo
-          make -j$(nproc) V=s || make -j1 V=s
-          echo "Build finalizado. Archivos generados:"
-          ls -la bin/targets/ar71xx/generic/
+          # Usamos FORCE=1 + paralelo moderado
+          make -j2 FORCE=1 V=s || make -j1 FORCE=1 V=s
 
       - name: Upload Firmware
         uses: actions/upload-artifact@v4
         with:
-          name: openwrt-18.06-lbe-m5-custom
+          name: openwrt-18.06-lbe-m5-patched
           path: openwrt/bin/targets/ar71xx/generic/*-sysupgrade.bin
-          if-no-files-found: error
