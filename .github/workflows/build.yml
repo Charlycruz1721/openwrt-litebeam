@@ -10,22 +10,20 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Dependencies (incluyendo Python 2 y GCC)
+      - name: Install Dependencies + Python 2
         run: |
           sudo apt update
           sudo apt install -y \
-            build-essential gcc g++ \
+            build-essential gcc g++ g++-multilib \
             libncurses5-dev gawk git gettext libssl-dev xsltproc \
             wget unzip python2 python-is-python2 \
-            file libelf-dev zlib1g-dev liblzma-dev \
-            subversion quilt
+            file libelf-dev zlib1g-dev liblzma-dev subversion quilt
 
-          # Forzar enlaces para OpenWrt 18.06
+          # Enlaces críticos para OpenWrt 18.06
           sudo ln -sf /usr/bin/python2 /usr/bin/python
-          sudo ln -sf /usr/bin/gcc /usr/bin/gcc-4.8 || true
-          sudo ln -sf /usr/bin/g++ /usr/bin/g++-4.8 || true
+          python --version
 
-      - name: Clone OpenWrt 18.06
+      - name: Clone OpenWrt
         run: |
           git clone -b openwrt-18.06 https://git.openwrt.org/openwrt/openwrt.git openwrt
 
@@ -35,11 +33,12 @@ jobs:
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
-      - name: Configure Firmware
+      - name: Configure + Bypass Prereqs + Patch
         run: |
           cd openwrt
-          rm -f .config
           
+          # Configuración
+          rm -f .config
           cat > .config << EOF
           CONFIG_TARGET_ar71xx=y
           CONFIG_TARGET_ar71xx_generic=y
@@ -48,10 +47,6 @@ jobs:
           EOF
           
           make defconfig
-
-      - name: Bypass Prereqs + Hot-Patch regd.c
-        run: |
-          cd openwrt
           
           # Bypass fuerte de prerrequisitos
           mkdir -p staging_dir/host/stamp
@@ -59,24 +54,21 @@ jobs:
           touch staging_dir/host/stamp/.prereq-tools
           touch staging_dir/host/stamp/.prereq-host
           
-          # Preparar mac80211
+          # Preparar y parchear mac80211 (regulatory bypass)
           make package/kernel/mac80211/prepare V=s || true
           
-          # Parche regulatory (bypass compliance)
           REGD_FILE=$(find build_dir -name regd.c | grep -E "ath/regd.c|ath9k" | head -n 1)
           if [ -n "$REGD_FILE" ]; then
-            echo "Aplicando parche en: $REGD_FILE"
+            echo "Parcheando $REGD_FILE"
             cp "$REGD_FILE" "$REGD_FILE.bak"
-            
             sed -i 's/return is_wrd_sku(reg->current_rd);/return true;/g' "$REGD_FILE"
             sed -i 's/if (reg->current_rd == COUNTRY_ERD_FLAG)/if (0)/g' "$REGD_FILE"
             sed -i '/__ath_regd_init/,+30 s/return 0;/memcpy(reg->alpha2, "00", 2);\n\treg->current_rd = 0;\n\treturn 0;/' "$REGD_FILE"
           fi
 
-      - name: Compile Firmware
+      - name: Compile
         run: |
           cd openwrt
-          # Usamos FORCE=1 + paralelo moderado
           make -j2 FORCE=1 V=s || make -j1 FORCE=1 V=s
 
       - name: Upload Firmware
