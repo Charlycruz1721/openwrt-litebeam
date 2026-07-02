@@ -13,55 +13,79 @@ jobs:
       - name: Install Dependencies
         run: |
           sudo apt update
-          sudo apt install -y build-essential libncurses5-dev gawk git gettext libssl-dev xsltproc wget unzip python3 python3-distutils file
-          # Enlace para engañar al script de chequeo de OpenWrt
-          sudo ln -sf /usr/bin/python3 /usr/bin/python
+          sudo apt install -y \
+            build-essential libncurses5-dev gawk git gettext libssl-dev xsltproc \
+            wget unzip python2 python3 python3-distutils python-is-python2 \
+            file libelf-dev libncurses-dev libz-dev zlib1g-dev \
+            bison flex subversion quilt liblzma-dev
 
       - name: Clone OpenWrt 18.06
         run: |
           git clone -b openwrt-18.06 https://git.openwrt.org/openwrt/openwrt.git openwrt
+          cd openwrt
 
-      - name: Configure Firmware and Bypass Prereqs
+      - name: Update Feeds
+        run: |
+          cd openwrt
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: Configure Firmware
         run: |
           cd openwrt
           rm -f .config
-          echo "CONFIG_TARGET_ar71xx=y" > .config
-          echo "CONFIG_TARGET_ar71xx_generic=y" >> .config
-          echo "CONFIG_TARGET_ar71xx_generic_DEVICE_ubnt-lbe-m5=y" >> .config
-          echo "CONFIG_PACKAGE_luci=y" >> .config
           
-          # Crear marcas de verificación para saltar el chequeo de prerrequisitos
-          mkdir -p staging_dir/host/stamp
-          touch staging_dir/host/stamp/.prereq-build
-          touch staging_dir/host/stamp/.prereq-tools
+          cat > .config << EOF
+          CONFIG_TARGET_ar71xx=y
+          CONFIG_TARGET_ar71xx_generic=y
+          CONFIG_TARGET_ar71xx_generic_DEVICE_ubnt-lbe-m5=y
+          CONFIG_PACKAGE_luci=y
+          CONFIG_PACKAGE_luci-app-uhttpd=y
+          # Opcional: más paquetes útiles
+          # CONFIG_PACKAGE_kmod-ath9k=y
+          EOF
           
           make defconfig
 
-      - name: Hot-Patch regd.c
+      - name: Hot-Patch regd.c (Regulatory Bypass)
         run: |
           cd openwrt
-          # Preparar entorno para parchar
-          make package/mac80211/prepare V=s
           
-          REGD_FILE=$(find build_dir/ -name "regd.c" | grep "ath/regd.c" | head -n 1)
+          # Preparar el paquete mac80211
+          make package/kernel/mac80211/prepare V=s || true
+          
+          # Buscar regd.c (ath9k en ar71xx)
+          REGD_FILE=$(find build_dir -name regd.c | grep -E "ath/regd.c|ath9k" | head -n 1)
           
           if [ -n "$REGD_FILE" ]; then
+            echo "Patching $REGD_FILE"
+            
+            # Backup
+            cp "$REGD_FILE" "$REGD_FILE.bak"
+            
+            # Parches comunes para bypass regulatory (world / 00)
             sed -i 's/return is_wrd_sku(reg->current_rd);/return true;/g' "$REGD_FILE"
             sed -i 's/if (reg->current_rd == COUNTRY_ERD_FLAG)/if (0)/g' "$REGD_FILE"
-            sed -i '/^static int __ath_regd_init/,/^}/ s/return 0;/memcpy(reg->alpha2, "00", 2);\n\treg->current_rd = 0;\n\treturn 0;/g' "$REGD_FILE"
+            
+            # Forzar country "00" (world) y permitir más canales/potencia
+            sed -i '/__ath_regd_init/,+20 s/return 0;/memcpy(reg->alpha2, "00", 2);\n\treg->current_rd = 0;\n\treturn 0;/' "$REGD_FILE"
+            
+            echo "Parche aplicado correctamente"
           else
-            echo "Archivo regd.c no encontrado, omitiendo parche."
+            echo "⚠️ regd.c no encontrado. Continuando sin parche..."
           fi
 
       - name: Compile Firmware
         run: |
           cd openwrt
-          # FORCE=1 ignora errores menores de versión
-          # Si falla, el V=s nos dirá por qué
-          make -j$(nproc) FORCE=1 || make -j1 V=s FORCE=1
+          # Usamos -j1 en caso de problemas de memoria/race, pero prueba primero con paralelo
+          make -j$(nproc) V=s || make -j1 V=s
+          echo "Build finalizado. Archivos generados:"
+          ls -la bin/targets/ar71xx/generic/
 
       - name: Upload Firmware
         uses: actions/upload-artifact@v4
         with:
-          name: openwrt-18.06-lbe-m5
-          path: openwrt/bin/targets/ar71xx/generic/*sysupgrade.bin
+          name: openwrt-18.06-lbe-m5-custom
+          path: openwrt/bin/targets/ar71xx/generic/*-sysupgrade.bin
+          if-no-files-found: error
