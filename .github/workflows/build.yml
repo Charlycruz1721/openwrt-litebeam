@@ -42,6 +42,7 @@ jobs:
       - name: Configure Firmware
         run: |
           cd openwrt
+          make distclean
           # 1. Buscar el nombre real del dispositivo en el código fuente
           DEVICE_ID=$(grep -l "ubnt-lbe-m5" target/linux/ath79/image/*.mk | head -n 1)
           # Si no encuentra el archivo, buscamos por el modelo en el archivo generic.mk
