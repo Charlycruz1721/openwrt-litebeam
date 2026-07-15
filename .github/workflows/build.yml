@@ -42,12 +42,10 @@ jobs:
       - name: Configure Firmware
         run: |
           cd openwrt
-          
-          # 1. Limpieza absoluta
           make distclean
           
-          # 2. Creación del archivo de configuración (Forzando la escritura)
-          cat << EOF > .config
+          # Crear el archivo .config de forma limpia
+          cat > .config << EOF
           CONFIG_TARGET_ath79=y
           CONFIG_TARGET_ath79_generic=y
           CONFIG_TARGET_ath79_generic_DEVICE_litebeam_m5=y
@@ -56,12 +54,17 @@ jobs:
           CONFIG_PACKAGE_crda=y
           EOF
           
-          # 3. VERIFICACIÓN: Esto mostrará en el log qué tiene el archivo realmente
-          echo "CONTENIDO DEL ARCHIVO .config:"
-          cat .config
-          
-          # 4. Generación final
+          # Ejecutar defconfig
           make defconfig
+          
+          # VERIFICACIÓN CRÍTICA:
+          # Si la línea no aparece en .config tras el defconfig, detenemos el proceso.
+          if ! grep -q "CONFIG_TARGET_ath79_generic_DEVICE_litebeam_m5=y" .config; then
+            echo "ERROR: La configuración de litebeam_m5 no fue aceptada por el sistema."
+            echo "Contenido actual de .config:"
+            cat .config
+            exit 1
+          fi
       - name: Compile
         run: |
           cd openwrt
