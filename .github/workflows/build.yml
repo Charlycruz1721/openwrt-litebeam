@@ -1,4 +1,4 @@
-name: Build OpenWrt Ath79 LiteBeam M5
+name: Build OpenWrt Ath79 
 
 on:
   workflow_dispatch:
