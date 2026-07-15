@@ -53,10 +53,10 @@ jobs:
           fi
           
           # Añadir configuración y paquetes necesarios
-          cat >> .config << EOF
+          cat > .config << EOF
           CONFIG_TARGET_ath79=y
           CONFIG_TARGET_ath79_generic=y
-          CONFIG_TARGET_ath79_generic_DEVICE_ubnt-lbe-m5=y
+          CONFIG_TARGET_ath79_generic_DEVICE_litebeam_m5=y
           CONFIG_PACKAGE_luci=y
           CONFIG_PACKAGE_wireless-regdb=y
           CONFIG_PACKAGE_crda=y
