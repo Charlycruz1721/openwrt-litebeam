@@ -5,33 +5,26 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-20.04
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      - name: Install Dependencies + Python 2
+
+      - name: Free Disk Space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /opt/ghc
+          sudo rm -rf "/usr/local/share/boost"
+          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
+
+      - name: Install Dependencies
         run: |
           sudo apt update
-          sudo apt install -y \
-            build-essential gcc g++ \
-            libncurses5-dev gawk git gettext libssl-dev xsltproc \
-            wget unzip python2.7 python2.7-dev \
-            file libelf-dev zlib1g-dev liblzma-dev subversion quilt
-
-          # Enlaces para OpenWrt 18.06
+          sudo apt install -y build-essential libncurses5-dev gawk git gettext libssl-dev \
+            xsltproc wget unzip python2.7 python2.7-dev file libelf-dev zlib1g-dev \
+            liblzma-dev subversion quilt time rsync
           sudo ln -sf /usr/bin/python2.7 /usr/bin/python
-          sudo ln -sf /usr/bin/python2.7 /usr/bin/python2
-          python --version
-          python2 --version
 
-          # Enlaces críticos para OpenWrt 18.06
-          sudo ln -sf /usr/bin/python2 /usr/bin/python
-
-          # Enlaces para OpenWrt 18.06
-          sudo ln -sf /usr/bin/python2.7 /usr/bin/python
-          sudo ln -sf /usr/bin/python2.7 /usr/bin/python2
-          python --version
-          python2 --version
       - name: Clone OpenWrt
         run: |
           git clone -b openwrt-18.06 https://git.openwrt.org/openwrt/openwrt.git openwrt
@@ -42,12 +35,11 @@ jobs:
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
-      - name: Configure + Bypass Prereqs + Patch
+      - name: Configure + Patch
         run: |
           cd openwrt
           
-          # Configuración
-          rm -f .config
+          # Configuración base
           cat > .config << EOF
           CONFIG_TARGET_ar71xx=y
           CONFIG_TARGET_ar71xx_generic=y
@@ -57,19 +49,11 @@ jobs:
           
           make defconfig
           
-          # Bypass fuerte de prerrequisitos
-          mkdir -p staging_dir/host/stamp
-          touch staging_dir/host/stamp/.prereq-build
-          touch staging_dir/host/stamp/.prereq-tools
-          touch staging_dir/host/stamp/.prereq-host
-          
-          # Preparar y parchear mac80211 (regulatory bypass)
+          # Parcheo de mac80211
           make package/kernel/mac80211/prepare V=s || true
           
           REGD_FILE=$(find build_dir -name regd.c | grep -E "ath/regd.c|ath9k" | head -n 1)
           if [ -n "$REGD_FILE" ]; then
-            echo "Parcheando $REGD_FILE"
-            cp "$REGD_FILE" "$REGD_FILE.bak"
             sed -i 's/return is_wrd_sku(reg->current_rd);/return true;/g' "$REGD_FILE"
             sed -i 's/if (reg->current_rd == COUNTRY_ERD_FLAG)/if (0)/g' "$REGD_FILE"
             sed -i '/__ath_regd_init/,+30 s/return 0;/memcpy(reg->alpha2, "00", 2);\n\treg->current_rd = 0;\n\treturn 0;/' "$REGD_FILE"
@@ -78,7 +62,8 @@ jobs:
       - name: Compile
         run: |
           cd openwrt
-          make -j2 FORCE=1 V=s || make -j1 FORCE=1 V=s
+          # Compilación paralela ajustada a los núcleos disponibles
+          make -j$(nproc) || make -j1 V=s
 
       - name: Upload Firmware
         uses: actions/upload-artifact@v4
