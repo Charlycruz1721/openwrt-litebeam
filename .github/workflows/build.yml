@@ -42,6 +42,15 @@ jobs:
       - name: Configure Firmware
         run: |
           cd openwrt
+          # 1. Buscar el nombre real del dispositivo en el código fuente
+          DEVICE_ID=$(grep -l "ubnt-lbe-m5" target/linux/ath79/image/*.mk | head -n 1)
+          # Si no encuentra el archivo, buscamos por el modelo en el archivo generic.mk
+          if [ -z "$DEVICE_ID" ]; then
+             # Listamos los dispositivos UBNT para que puedas ver el nombre real en el log
+             echo "Dispositivo no encontrado con el nombre 'ubnt-lbe-m5'. Lista de posibles dispositivos UBNT:"
+             grep -i "ubnt" target/linux/ath79/image/generic.mk | grep "define Device"
+             exit 1
+          fi
           
           # Añadir configuración y paquetes necesarios
           cat >> .config << EOF
