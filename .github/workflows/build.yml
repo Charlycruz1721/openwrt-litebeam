@@ -42,6 +42,9 @@ jobs:
       - name: Configure Firmware
         run: |
           cd openwrt
+          echo "--- LISTA DE DISPOSITIVOS VÁLIDOS PARA ATH79 ---"
+          grep -h "define Device/" target/linux/ath79/image/*.mk | cut -d/ -f2
+          echo "-----------------------------------------------"
           make distclean
           
           # Crear el archivo .config de forma limpia
