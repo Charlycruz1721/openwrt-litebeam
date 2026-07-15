@@ -1,72 +1,68 @@
-name: Build OpenWrt 18.06 LiteBeam M5
+name: Build OpenWrt Ath79 LiteBeam M5
 
 on:
   workflow_dispatch:
 
 jobs:
   build:
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Free Disk Space
-        run: |
-          sudo rm -rf /usr/share/dotnet
-          sudo rm -rf /opt/ghc
-          sudo rm -rf "/usr/local/share/boost"
-          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
-
       - name: Install Dependencies
         run: |
           sudo apt update
-          sudo apt install -y build-essential libncurses5-dev gawk git gettext libssl-dev \
-            xsltproc wget unzip python2.7 python2.7-dev file libelf-dev zlib1g-dev \
-            liblzma-dev subversion quilt time rsync
-          sudo ln -sf /usr/bin/python2.7 /usr/bin/python
+          sudo apt install -y build-essential clang flex bison g++ gawk \
+          gcc-multilib g++-multilib gettext git libncurses-dev libssl-dev \
+          python3-distutils rsync unzip zlib1g-dev libelf-dev swig libtinfo-dev
+
+      - name: Prepare Configuration Overlay
+        run: |
+          # Crear estructura de carpetas para el overlay de configuración
+          mkdir -p files/etc/config
+          
+          # Crear el archivo wireless para forzar el país 00 (World)
+          cat > files/etc/config/wireless << EOF
+          config wifi-device 'radio0'
+                  option type 'mac80211'
+                  option path 'platform/ahb/180c0000.wmac'
+                  option country '00'
+                  option hwmode '11a'
+                  option channel 'auto'
+          EOF
 
       - name: Clone OpenWrt
         run: |
-          git clone -b openwrt-18.06 https://git.openwrt.org/openwrt/openwrt.git openwrt
-
-      - name: Update Feeds
-        run: |
+          git clone https://github.com/openwrt/openwrt.git openwrt
           cd openwrt
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
-      - name: Configure + Patch
+      - name: Configure Firmware
         run: |
           cd openwrt
           
-          # Configuración base
-          cat > .config << EOF
-          CONFIG_TARGET_ar71xx=y
-          CONFIG_TARGET_ar71xx_generic=y
-          CONFIG_TARGET_ar71xx_generic_DEVICE_ubnt-lbe-m5=y
+          # Añadir configuración y paquetes necesarios
+          cat >> .config << EOF
+          CONFIG_TARGET_ath79=y
+          CONFIG_TARGET_ath79_generic=y
+          CONFIG_TARGET_ath79_generic_DEVICE_ubnt-lbe-m5=y
           CONFIG_PACKAGE_luci=y
+          CONFIG_PACKAGE_wireless-regdb=y
+          CONFIG_PACKAGE_crda=y
           EOF
           
           make defconfig
-          
-          # Parcheo de mac80211
-          make package/kernel/mac80211/prepare V=s || true
-          
-          REGD_FILE=$(find build_dir -name regd.c | grep -E "ath/regd.c|ath9k" | head -n 1)
-          if [ -n "$REGD_FILE" ]; then
-            sed -i 's/return is_wrd_sku(reg->current_rd);/return true;/g' "$REGD_FILE"
-            sed -i 's/if (reg->current_rd == COUNTRY_ERD_FLAG)/if (0)/g' "$REGD_FILE"
-            sed -i '/__ath_regd_init/,+30 s/return 0;/memcpy(reg->alpha2, "00", 2);\n\treg->current_rd = 0;\n\treturn 0;/' "$REGD_FILE"
-          fi
 
       - name: Compile
         run: |
           cd openwrt
-          # Compilación paralela ajustada a los núcleos disponibles
-          make -j$(nproc) || make -j1 V=s
+          # El sistema copiará automáticamente los archivos de la carpeta 'files'
+          make -j$(nproc)
 
       - name: Upload Firmware
         uses: actions/upload-artifact@v4
         with:
-          name: openwrt-18.06-lbe-m5-patched
-          path: openwrt/bin/targets/ar71xx/generic/*-sysupgrade.bin
+          name: openwrt-ath79-lbe-m5-unlocked
+          path: openwrt/bin/targets/ath79/generic/*-sysupgrade.bin
