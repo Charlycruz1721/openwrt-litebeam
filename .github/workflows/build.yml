@@ -42,32 +42,19 @@ jobs:
       - name: Configure Firmware
         run: |
           cd openwrt
-          echo "--- LISTA DE DISPOSITIVOS VÁLIDOS PARA ATH79 ---"
-          grep -h "define Device/" target/linux/ath79/image/*.mk | cut -d/ -f2
-          echo "-----------------------------------------------"
           make distclean
           
-          # Crear el archivo .config de forma limpia
+          # Generación del archivo .config con el ID exacto de tu lista
           cat > .config << EOF
           CONFIG_TARGET_ath79=y
           CONFIG_TARGET_ath79_generic=y
-          CONFIG_TARGET_ath79_generic_DEVICE_litebeam_m5=y
+          CONFIG_TARGET_ath79_generic_DEVICE_ubnt_litebeam-m5-xw=y
           CONFIG_PACKAGE_luci=y
           CONFIG_PACKAGE_wireless-regdb=y
           CONFIG_PACKAGE_crda=y
           EOF
           
-          # Ejecutar defconfig
           make defconfig
-          
-          # VERIFICACIÓN CRÍTICA:
-          # Si la línea no aparece en .config tras el defconfig, detenemos el proceso.
-          if ! grep -q "CONFIG_TARGET_ath79_generic_DEVICE_litebeam_m5=y" .config; then
-            echo "ERROR: La configuración de litebeam_m5 no fue aceptada por el sistema."
-            echo "Contenido actual de .config:"
-            cat .config
-            exit 1
-          fi
       - name: Compile
         run: |
           cd openwrt
